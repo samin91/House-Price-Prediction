@@ -1,0 +1,490 @@
+  `---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+# Loading the libraries we need
+
+```{r}
+library(knitr)
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+library(caret)
+library(gridExtra)
+library(scales)
+library(ggrepel)
+library(psych)
+
+setwd("D:/Kaggle")
+```
+
+
+# Reading csv files as dataframes
+
+```{r}
+houseprice.train<-read.csv(file = "D:/Kaggle/train .csv",stringsAsFactors = FALSE, header = TRUE)
+houseprice.test<-read.csv(file = "D:/Kaggle/test .csv",stringsAsFactors = FALSE, header = TRUE)
+```
+
+
+
+
+```{r}
+dataTable<-houseprice.train$SalePrice
+houseprice.train$SalePrice = log(houseprice.train$SalePrice+1)
+```
+
+
+# We combine training set and test set
+
+```{r}
+houseprice.test$SalePrice<-NA
+houseprice.test$Train<-0
+houseprice.train$Train<-1
+if( ncol(houseprice.test) == ncol(houseprice.train) )
+{houseprice.full<-rbind(houseprice.train,houseprice.test)}
+```
+
+#Taking care of missing values
+
+
+#which columns contain missing data (NAs)
+
+```{r}
+na.cols <- which(colSums(is.na(houseprice.full)) > 0)
+Percentagecol<-apply(houseprice.full[,na.cols], 2, function(col)sum(is.na(col))/length(col))
+```
+
+
+#Pool quality
+
+PoolQC: Pool quality
+		
+       Ex	Excellent
+       Gd	Good
+       TA	Average/Typical
+       Fa	Fair
+       NA	No Pool
+       
+PoolQC column has the highest number of missing values. We replace those NAs with 'None'. As so many items are without values it makes sense that impute them with none: most of the houses do not have pools.        
+```{r}
+houseprice.full$PoolQC[is.na(houseprice.full$PoolQC)] = 'None'
+```
+       
+#PoolArea and PoolQC
+
+There are three houses with PoolArea and without pool quality. We fill them using this reasoning: 
+
+```{r}
+table(houseprice.full$PoolQC)
+sum(is.na(houseprice.full$PoolQC))
+table(houseprice.full$PoolArea)
+sum(is.na(houseprice.full$PoolArea))
+
+houseprice.full[2421,'PoolQC']='Ex'
+houseprice.full[2504,'PoolQC']='Ex'
+houseprice.full[2600,'PoolQC']='Fa'
+```
+
+
+
+
+```{r}
+houseprice.full[1380,'Electrical']='SBrkr'
+```
+
+
+##Garage variables 
+** 7 variables related to garage**
+
+'GarageCars' and 'GarageArea' each one has one NA
+These four predictors each has 159 missing values: 'GarageFinish', 'GarageCond', 'GarageYrBlt', 'GaragQual'
+'GarageType' has 157 NAs
+
+#GarageYrBlt: the year the garage was built. All the missing values (159) will be replaced with the 'YearBuilt'
+```{r}
+houseprice.full[sapply(houseprice.full['GarageYrBlt'],is.na),'GarageYrBlt']=houseprice.full[sapply(houseprice.full['GarageYrBlt'],is.na),'YearBuilt']
+```
+
+As these predictors all relate to the same entity, garage, we can use them to find about the differences between missing values. GarageType has 157 missing values and three other related predictors have 159 NAs. We want to check where this difference comes from.
+
+The difference is between houses number 2127 and 2577. House 2127 has a garage and house 2577 does not. 
+
+```{r}
+#select(houseprice.full,GarageType,GarageYrBlt,GarageFinish,GarageCars,GarageArea,GarageQual,GarageCond)
+
+garage.cols <- c('GarageArea', 'GarageCars', 'GarageQual', 'GarageFinish', 'GarageCond', 'GarageType')
+
+houseprice.full[is.na(houseprice.full$GarageCond), garage.cols]
+
+table(is.na(houseprice.full$GarageYrBlt))
+
+
+#House 2127 has a Garage values for GarageArea and GarageCars and Garage type must be imputed
+#In 2577 we have the Garage Type but the other values are missed 
+
+select(houseprice.full,GarageArea,GarageCars,GarageQual,GarageFinish,GarageCond, GarageType)%>%
+filter(GarageArea < 370 & GarageArea > 350 & GarageCars == 1)
+
+#We need GarageCond, GarageFinish, GarageQual and GarageCond
+#GaragCond and GarageQual is TA for all of those values 
+houseprice.full[2127,'GarageQual']='TA'
+houseprice.full[2127,'GarageCond']='TA'
+houseprice.full[2127,'GarageFinish']='Unf'
+
+#for 2577
+#the mean for Detchd is 419
+houseprice.full[2577,'GarageArea']=419
+houseprice.full[2577,'GarageQual']='TA'
+houseprice.full[2577,'GarageCond']='TA'
+houseprice.full[2577,'GarageFinish']='Unf'
+houseprice.full[2577,'GarageCars']=1
+
+#replacing the missing value
+for (col in garage.cols){
+  if (sapply(houseprice.full[col], is.numeric) == TRUE){
+    houseprice.full[sapply(houseprice.full[col], is.na), col] = 0
+  }
+  else{
+    houseprice.full[sapply(houseprice.full[col], is.na), col] = 'None'
+  }
+}  
+  
+```
+
+
+
+
+```{r}
+Mas<-c('MasVnrType','MasVnrArea')
+houseprice.full[2611,'MasVnrType']='BrkCmn'
+for (col in Mas){
+  if (sapply(houseprice.full[col], is.numeric) == TRUE){
+    houseprice.full[sapply(houseprice.full[col], is.na), col] = 0
+  }
+  else{
+    houseprice.full[sapply(houseprice.full[col], is.na), col] = 'None'
+  }
+} 
+
+```
+
+
+###Basement Variables
+
+**11 variables that relate to the Basement of a house**
+
+```{r}
+Basement<-c('BsmtQual','BsmtCond','BsmtExposure','BsmtFullBath','BsmtHalfBath','BsmtFinSF1','BsmtFinSF2','BsmtUnfSF','TotalBsmtSF','BsmtFinType1','BsmtFinType2')
+
+#The total basement of row 2014 is 1044 which if we compare this value with the mean and median of the values the estimating TA for the BsmtCond sounds more appropriate
+
+houseprice.full[2041,'BsmtCond']='TA'
+
+houseprice.full[2186,'BsmtCond']='Gd'
+
+houseprice.full[2525,'BsmtCond']='TA'
+
+#the condition for all 3 rows are the same
+houseprice.full[949,'BsmtExposure']='No'
+houseprice.full[1488,'BsmtExposure']='No'
+houseprice.full[2349,'BsmtExposure']='No'
+
+for (col in Basement){
+  if (sapply(houseprice.full[col], is.numeric) == TRUE){
+    houseprice.full[sapply(houseprice.full[col], is.na), col] = 0
+  }
+  else{
+    houseprice.full[sapply(houseprice.full[col], is.na), col] = 'No'
+  }
+}
+  
+```
+
+
+#kitchenQuality
+
+```{r}
+houseprice.full[1556,'KitchenQual']='TA'
+```
+
+
+#Miscellaneous Feature, MiscVal
+
+Elev	Elevator
+       Gar2	2nd Garage (if not described in garage section)
+       Othr	Other
+       Shed	Shed (over 100 SF)
+       TenC	Tennis Court
+       NA	None
+```{r}
+houseprice.full[is.na(houseprice.full$MiscFeature),'MiscFeature']='None'
+```
+
+
+#Alley 
+
+Grvl	Gravel
+       Pave	Paved
+       NA 	No alley access
+
+```{r}
+houseprice.full[is.na(houseprice.full$Alley),'Alley']='None'
+```
+
+
+#Fence
+
+ GdPrv	Good Privacy
+       MnPrv	Minimum Privacy
+       GdWo	Good Wood
+       MnWw	Minimum Wood/Wire
+       NA	No Fence
+We don't have a feature to see whether the fence quality is missing or the house doesn't have therefore we subsititute NA with None
+
+```{r}
+houseprice.full[is.na(houseprice.full$Fence),'Fence']='None'
+```
+
+
+#FireplaceQU,Fireplaces
+##Fireplace quality and number of fire places"
+
+The number of NAs in FireplaceQu corresponds to the number of houses with 0 fireplaces. This means that we can safely replace the NAs in FireplaceQu with 'None'.
+
+```{r}
+houseprice.full[is.na(houseprice.full$FireplaceQu),"FireplaceQu"]='None'
+```
+
+
+#LotFrontage:Linear feet of street connected to property
+We impute the missing values with the mean of all the lotFrontage values we have
+
+```{r}
+lot.mean <- mean(houseprice.full$LotFrontage, na.rm=TRUE)
+houseprice.full$LotFrontage[is.na(houseprice.full$LotFrontage)] = lot.mean
+```
+
+
+#MsZoning, MsSubclass
+```{r}
+houseprice.full[1916,'MSZoning']='RL'
+houseprice.full[2217,'MSZoning']='RL'
+houseprice.full[2251,'MSZoning']='RM'
+houseprice.full[2905,'MSZoning']='RL'
+```
+
+
+#Utilities
+```{r}
+houseprice.full[1916,'Utilities']='AllPub'
+houseprice.full[1946,'Utilities']='AllPub'
+```
+
+
+#Functional
+```{r}
+#approximatly all the houses the has the Type Functionallty the have a more than 5 verallCond
+houseprice.full[2217,'Functional']='Typ'
+houseprice.full[2474,'Functional']='Maj2'
+```
+
+
+
+```{r}
+houseprice.full[2490,'SaleType']='WD'
+```
+
+
+#Exterior1st
+#Exterior2nd
+```{r}
+houseprice.full[2152,'Exterior1st']='VinlySd'
+houseprice.full[2152,'Exterior2nd']='VinlySd'
+```
+
+
+#Multicolinearity (correlation plot)
+```{r}
+x<-c('YearRemodAdd', 'GarageYrBlt', 'GarageArea', 'GarageCond', 'TotalRmsAbvGrd', 'BsmtFinSF1')
+houseprice.full<-houseprice.full[ , !names(houseprice.full) %in% x] 
+```
+
+
+#Lable encoding Ordinal Variables
+```{r}
+houseprice.full$ExterCond<-as.numeric(ordered(houseprice.full$ExterCond,levels=c("Po","Fa","TA","Gd","Ex")))
+#unique(houseprice.full$GarageFinish)
+houseprice.full$BsmtQual<-as.numeric(ordered(houseprice.full$BsmtQual, levels=c("No","Fa","TA","Gd","Ex")))
+houseprice.full$BsmtExposure<-as.numeric(ordered(houseprice.full$BsmtExposure,levels=c("No","Gd","Mn","Av")))
+houseprice.full$BsmtFinType1<-as.numeric(ordered(houseprice.full$BsmtFinType1,levels=c("No", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")))
+houseprice.full$BsmtFinType2 <-as.numeric(ordered(houseprice.full$BsmtFinType2, levels=c("No", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")))
+houseprice.full$HeatingQC<-as.numeric(ordered(houseprice.full$HeatingQC,levels=c("Po", "Fa", "TA", "Gd", "Ex")))
+
+houseprice.full$FireplaceQu<-as.numeric(ordered(houseprice.full$FireplaceQu, levels=c("None","Po", "Fa", "TA", "Gd", "Ex")))
+houseprice.full$GarageQual<-as.numeric(ordered(houseprice.full$GarageQual, levels=c("None","Po", "Fa", "TA", "Gd", "Ex")))
+houseprice.full$ExterQual<-as.numeric(ordered(houseprice.full$ExterQual,levels=c("Po", "Fa", "TA", "Gd", "Ex")))
+houseprice.full$KitchenQual<-as.numeric(ordered(houseprice.full$KitchenQual, levels=c("Po", "Fa", "TA", "Gd", "Ex")))
+houseprice.full$PoolQC<-as.numeric(ordered(houseprice.full$PoolQC,levels=c("None", "Fa", "Gd", "Ex")))
+houseprice.full$Fence<-as.numeric(ordered(houseprice.full$Fence,levels=c("None", "MnWw", "GdWo", "MnPrv", "GdPrv")))
+houseprice.full$GarageFinish <-as.numeric(ordered(houseprice.full$GarageFinish,levels=c("None", "Unf", "RFn", "Fin")))
+houseprice.full$LandSlope<-as.numeric(ordered(houseprice.full$LandSlope,levels=c("Sev", "Mod", "Gtl")))
+houseprice.full$LotShape<-as.numeric(ordered(houseprice.full$LotShape,levels=c("IR3", "IR2", "IR1", "Reg")))
+houseprice.full$Street<-as.numeric(ordered(houseprice.full$Street,levels=c("Pave", "Grvl")))
+
+houseprice.full$Functional <- as.numeric(ordered(houseprice.full$Functional, levels=c('Sal','Sev','Maj2','Maj1','Mod', 'Min2', 'Min1', 'Typ')))
+houseprice.full$MSZoning <- as.numeric(ordered(houseprice.full$MSZoning, levels = c("C (all)", "RH", "FV" , "RM" , "RL")))
+```
+
+
+
+```{r}
+houseprice.full$OverallCond = as.character(houseprice.full$OverallCond)
+houseprice.full$YrSold = as.character(houseprice.full$YrSold)
+houseprice.full$MoSold = as.character(houseprice.full$MoSold)
+houseprice.full$MSSubClass = as.character(houseprice.full$MSSubClass)
+
+MSSubClass=c("20", "30", "40", "45", "50", "60", "70", "75", "80", "85", 
+    "90", "120", "150", "160", "180", "190")
+houseprice.full$MSSubClass<-as.numeric(ordered(houseprice.full$MSSubClass,levels=MSSubClass))
+
+houseprice.full$YrSold<-as.numeric(as.factor(houseprice.full$YrSold))
+houseprice.full$MoSold<-as.numeric(as.factor(houseprice.full$MoSold))
+houseprice.full$OverallCond<-as.numeric(as.factor(houseprice.full$OverallCond))
+houseprice.full$CentralAir<-as.numeric(as.factor(houseprice.full$CentralAir))
+```
+
+
+
+#Turning categorical variables which are nominal into dummy
+```{r}
+houseprice.full %>%
+  sapply( is.numeric) %>%
+  which()%>%
+  names() -> numeric_features
+
+houseprice.full %>%
+  sapply( is.character) %>%
+  which()%>%
+  names() -> character_features
+numeric_set<-houseprice.full[numeric_features]
+character_set<-houseprice.full[character_features]
+for(i in 1:ncol(numeric_set)){
+        if (abs(skew(numeric_set[,i]))>0.5){
+         numeric_set[,i] <- log(numeric_set[,i] +1)
+        }
+}
+dummies <- dummyVars("~.", data=character_set)
+categorical_dummy <- data.frame(predict(dummies, newdata=character_set))
+
+houseprice.full <- cbind(numeric_set, categorical_dummy)
+```
+
+
+
+```{r}
+houseprice.train<-houseprice.full[houseprice.full$Train==1,]
+houseprice.test<-houseprice.full[houseprice.full$Train==0,]
+houseprice.train=select(houseprice.train,-Train)
+houseprice.test=select(houseprice.test,-Train)
+```
+
+
+#We use this for correlation matrix plot
+```{r}
+library(corrplot)
+cor_numVar <- cor(houseprice.full,use="pairwise.complete.obs")
+cor_sorted <- as.matrix(sort(cor_numVar[,'SalePrice'], decreasing = TRUE))
+Cor <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0.00)))
+variables<-c('Id',Cor)
+```
+
+
+# some suspicious houses with abnormally large GrLivArea's, 2 of which have very low SalePrices
+```{r}
+idx.outliers <- which(houseprice.train$OverallQual<2)
+houseprice.full<-houseprice.full[!1:nrow(houseprice.full) %in% idx.outliers,]
+idx.outliers1 <- which(houseprice.train$GrLivArea>4000)
+houseprice.full<-houseprice.full[!1:nrow(houseprice.full) %in% idx.outliers1,]
+```
+
+
+
+```{r}
+train1<-houseprice.train[variables]
+train1<-select(train1,-Id)
+test <- houseprice.test[variables]
+test<-select(test,-Id)
+```
+
+#Outlier Detection
+outliers may lower our ability to accurately predict
+**var X > mean(X) + 3*sd(X)**
+```{r}
+miss2 <- c()
+for(i in 1:nrow(train1))
+{
+  
+if(abs(train1[i,"SalePrice"] - mean(train1[,"SalePrice"])) > 3*sd(train1[,"SalePrice"]))
+    miss2 <- append(miss2,i)
+}
+
+if (length(miss2) > 0)
+{
+ train1<-train1[-(miss2),]
+  print(paste(length(miss2)," outlier rows deleted, indices:",paste(miss2,";"),".",""))} else { print("No outlier rows deleted.") }
+```
+
+
+
+```{r}
+#
+library(lars)
+library(caTools)
+library(caret)
+library(Metrics)
+
+#set.seed(101)            
+#split1=sample.split(train1,SplitRatio=2/3)
+#trains1=subset(train1,split1==TRUE)
+#trains2=subset(train1,split1==FALSE)
+#Independent_variable1<- as.matrix(trains1[,-1])
+#Dependent_Variable1<- as.matrix(trains1[,1])
+#laa1<- lars(Independent_variable1,Dependent_Variable1,type = 'lasso')
+#best_step<- laa1$df[which.min(laa1$Cp)]
+#Pre<- predict.lars(laa1,newx =as.matrix(trains2[,-1]), s=best_step, type= "fit")
+#pre1<-exp(Pre$fit)
+#trainsale<-exp(trains2$SalePrice)
+#r=rmse(pre1,trainsale)
+```
+
+
+
+#Lasso linear regression predictor
+**We use lasso to avoid overfitting. Lasso automagically selects significant variables by shrinking the coefficients of unimportant predictors to zero**
+```{r}
+library(lars)
+Independent_variable<- as.matrix(train1[,-1])
+Dependent_Variable<- as.matrix(train1[,1])
+
+laa<- lars(Independent_variable,Dependent_Variable,type = 'lasso')
+
+best_step<- laa$df[which.min(laa$Cp)]
+Prediction_2<- predict.lars(laa,newx =as.matrix(test[,-1]), s=best_step, type= "fit")
+houseprice.test$SalePrice<-exp(Prediction_2$fit)
+houseprice.test%>%
+  select(Id,SalePrice)%>%
+  write.csv(file="predict20.csv",row.names=F)
+min(lasso_mod$results$RMSE)
+```
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
